@@ -43,11 +43,10 @@ public class MasterAuto extends OpMode {
     // Motor directions
     private static final DcMotorSimple.Direction SHOOTER_DIR = DcMotorSimple.Direction.FORWARD;
     private static final DcMotorSimple.Direction INTAKE_DIR = DcMotorSimple.Direction.FORWARD;
-    private static final DcMotorSimple.Direction FEEDER_DIR = DcMotorSimple.Direction.FORWARD;
 
     // Shooter velocity control (ticks per second)
-    private static final double SHOOTER_TARGET_VEL = 1500;
-    private static final double SHOOTER_TOLERANCE = 50;
+    private static final double SHOOTER_TARGET_VEL = 1400;
+    private static final double SHOOTER_TOLERANCE = 150;
     private static final double SHOOTER_P = 12.0;
     private static final double SHOOTER_I = 0.0;
     private static final double SHOOTER_D = 0.0;
@@ -63,13 +62,15 @@ public class MasterAuto extends OpMode {
 
     // Mechanism powers and servo positions
     private static final double INTAKE_POWER = 1.0;
-    private static final double FEEDER_POWER = 1.0;
+    private static final double FEEDER_HOME_POS = 0.0;
+    private static final double FEEDER_FEED_POS = 1.0;
     private static final double SERVO_STOW_POS = 0.0;
-    private static final double SERVO_DEPLOY_POS = 0.5;
+    private static final double SERVO_DEPLOY_POS = 1.0;
 
     // Shooting sequence timing
     private static final int SHOTS_PER_CYCLE = 3;
     private static final double FEED_PULSE_S = 0.35;
+    private static final double FEEDER_RETURN_S = 0.25;
     private static final double READY_HOLD_S = 0.15;
     private static final double SPINUP_TIMEOUT_S = 3.0;
     private static final double RECOVER_TIMEOUT_S = 1.0;
@@ -105,7 +106,7 @@ public class MasterAuto extends OpMode {
     private Follower follower;
     private DcMotorEx shooter;
     private DcMotorEx intake;
-    private DcMotorEx feeder;
+    private Servo feeder;
     private Servo intakeServo;
     private VoltageSensor voltageSensor;
     private VisionPortal portal;
@@ -143,7 +144,12 @@ public class MasterAuto extends OpMode {
         // Initializes mechanisms
         shooter = tryMotor(SHOOTER_NAME, SHOOTER_DIR, DcMotor.ZeroPowerBehavior.FLOAT, true);
         intake = tryMotor(INTAKE_NAME, INTAKE_DIR, DcMotor.ZeroPowerBehavior.BRAKE, false);
-        feeder = tryMotor(FEEDER_NAME, FEEDER_DIR, DcMotor.ZeroPowerBehavior.BRAKE, false);
+        feeder = hardwareMap.tryGet(Servo.class, FEEDER_NAME);
+        if (feeder == null) {
+            missingDevices.add(FEEDER_NAME);
+        } else {
+            feeder.setPosition(FEEDER_HOME_POS);
+        }
         intakeServo = hardwareMap.tryGet(Servo.class, INTAKE_SERVO_NAME);
         if (intakeServo == null) {
             missingDevices.add(INTAKE_SERVO_NAME);
@@ -262,7 +268,7 @@ public class MasterAuto extends OpMode {
 
             case FEED:
                 if (stateTimer.seconds() > FEED_PULSE_S) {
-                    setFeeder(0);
+                    setFeeder(false);
                     shotsFired++;
                     if (shotsFired >= SHOTS_PER_CYCLE) {
                         finishShooting();
@@ -273,7 +279,10 @@ public class MasterAuto extends OpMode {
                 break;
 
             case RECOVER:
-                if (shooterStable() || stateTimer.seconds() > RECOVER_TIMEOUT_S) setState(State.FEED);
+                if (stateTimer.seconds() > FEEDER_RETURN_S
+                        && (shooterStable() || stateTimer.seconds() > RECOVER_TIMEOUT_S)) {
+                    setState(State.FEED);
+                }
                 break;
 
             case DRIVE_TO_PICKUP:
@@ -317,12 +326,12 @@ public class MasterAuto extends OpMode {
 
             case FEED:
                 setShooter(true);
-                setFeeder(FEEDER_POWER);
+                setFeeder(true);
                 setIntake(INTAKE_POWER);
                 break;
 
             case RECOVER:
-                setFeeder(0);
+                setFeeder(false);
                 setIntake(0);
                 break;
 
@@ -355,7 +364,7 @@ public class MasterAuto extends OpMode {
 
     // Decides what follows the shooting sequence
     private void finishShooting() {
-        setFeeder(0);
+        setFeeder(false);
         setIntake(0);
         setShooter(false);
         boolean timeForCycle = (AUTO_TOTAL_S - matchTimer.seconds()) >= MIN_CYCLE_TIME_S;
@@ -429,16 +438,16 @@ public class MasterAuto extends OpMode {
         if (intake != null) intake.setPower(power);
     }
 
-    // Sets feeder power
-    private void setFeeder(double power) {
-        if (feeder != null) feeder.setPower(power);
+    // Moves the feeder servo to feed or home
+    private void setFeeder(boolean feed) {
+        if (feeder != null) feeder.setPosition(feed ? FEEDER_FEED_POS : FEEDER_HOME_POS);
     }
 
     // Stops all mechanisms
     private void stopMechanisms() {
         setShooter(false);
         setIntake(0);
-        setFeeder(0);
+        setFeeder(false);
     }
 
     // Gets a motor or records it as missing
@@ -539,8 +548,8 @@ public class MasterAuto extends OpMode {
     // Shooter sags after each shot: raise RECOVER_TIMEOUT_S and READY_HOLD_S.
     // Shots fall short at low battery: raise MAX_COMP_SCALE or raise SHOOTER_TARGET_VEL.
     // Pickup misses artifacts: move pickupEnd further past them and raise INTAKE_DWELL_S.
-    // Feeder jams or double feeds: adjust FEED_PULSE_S and FEEDER_POWER.
+    // Feeder jams or double feeds: adjust FEED_PULSE_S, FEEDER_RETURN_S and the feeder positions.
     // Starts or ends in the wrong spot: retune the waypoint numbers in makePlan at the field.
     // Mechanism spins backwards: flip the matching direction constant at the top of the file.
-    // Servo moves wrong way: swap SERVO_STOW_POS and SERVO_DEPLOY_POS.
+    // Intake servo moves wrong way: swap SERVO_STOW_POS and SERVO_DEPLOY_POS.
 }
