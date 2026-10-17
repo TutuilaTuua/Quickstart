@@ -1,9 +1,10 @@
 package org.firstinspires.ftc.teamcode;
 
+import static com.pedropathing.api.Paths.line;
+
+import com.pedropathing.api.PoseFactory;
 import com.pedropathing.follower.Follower;
-import com.pedropathing.geometry.BezierLine;
-import com.pedropathing.geometry.Pose;
-import com.pedropathing.paths.PathChain;
+import com.pedropathing.math.Pose;
 import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
@@ -16,7 +17,7 @@ import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
-import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
+import org.firstinspires.ftc.teamcode.pedro.Constants;
 import org.firstinspires.ftc.vision.VisionPortal;
 import org.firstinspires.ftc.vision.apriltag.AprilTagDetection;
 import org.firstinspires.ftc.vision.apriltag.AprilTagProcessor;
@@ -31,7 +32,7 @@ public class MasterAuto extends OpMode {
 
     private enum Side { LEFT, RIGHT }
 
-    private enum State { DRIVE_TO_SHOOT, SPINUP, FEED, RECOVER, DRIVE_TO_PICKUP, INTAKE_SWEEP, PARK, DONE }
+    private enum State { DRIVE_TO_SHOOT, SPINUP, FEED, RECOVER, DRIVE_TO_PICKUP, INTAKE_SWEEP, INTAKE_DWELL, PARK, DONE }
 
     // Hardware names
     private static final String SHOOTER_NAME = "shooter";
@@ -74,36 +75,18 @@ public class MasterAuto extends OpMode {
     private static final double SPINUP_TIMEOUT_S = 3.0;
     private static final double RECOVER_TIMEOUT_S = 1.0;
 
-    // Drive limits and timeouts
-    private static final double DRIVE_MAX_POWER = 0.9;
-    private static final double SWEEP_MAX_POWER = 0.35;
+    // Path timeouts and intake dwell
     private static final double PATH_TIMEOUT_S = 4.0;
     private static final double SWEEP_TIMEOUT_S = 3.5;
+    private static final double INTAKE_DWELL_S = 0.5;
 
     // Match clock
     private static final double AUTO_LIMIT_S = 29.5;
     private static final double AUTO_TOTAL_S = 30.0;
     private static final double MIN_CYCLE_TIME_S = 12.0;
 
-    // Start poses (inches, radians) - placeholders to tune at the field
-    private static final Pose BLUE_LEFT_START = new Pose(26, 130, Math.toRadians(144));
-    private static final Pose BLUE_RIGHT_START = new Pose(56, 8, Math.toRadians(90));
-    private static final Pose RED_LEFT_START = mirror(BLUE_RIGHT_START);
-    private static final Pose RED_RIGHT_START = mirror(BLUE_LEFT_START);
-
-    // Blue waypoints per side, red is mirrored from these
-    private static final Plan BLUE_LEFT_WAYPOINTS = new Plan(
-            BLUE_LEFT_START,
-            new Pose(50, 94, Math.toRadians(135)),
-            new Pose(44, 84, Math.toRadians(180)),
-            new Pose(16, 84, Math.toRadians(180)),
-            new Pose(40, 72, Math.toRadians(90)));
-    private static final Plan BLUE_RIGHT_WAYPOINTS = new Plan(
-            BLUE_RIGHT_START,
-            new Pose(60, 18, Math.toRadians(112)),
-            new Pose(44, 36, Math.toRadians(180)),
-            new Pose(16, 36, Math.toRadians(180)),
-            new Pose(36, 12, Math.toRadians(90)));
+    // Field mirror line used for the red alliance
+    private static final double FIELD_MIRROR_X = 70.75;
 
     // Pose handoff for a following TeleOp
     public static Pose lastPose = null;
@@ -117,11 +100,6 @@ public class MasterAuto extends OpMode {
             this.pickupStart = pickupStart;
             this.pickupEnd = pickupEnd;
             this.park = park;
-        }
-
-        // Mirrors every pose across the field centerline
-        Plan mirrored() {
-            return new Plan(mirror(start), mirror(shoot), mirror(pickupStart), mirror(pickupEnd), mirror(park));
         }
     }
 
@@ -144,7 +122,6 @@ public class MasterAuto extends OpMode {
     private Side side = Side.LEFT;
     private Plan plan;
     private State state = State.DRIVE_TO_SHOOT;
-    private boolean started = false;
     private boolean spinupTimedOut = false;
     private int cycle = 0;
     private int shotsFired = 0;
@@ -162,7 +139,7 @@ public class MasterAuto extends OpMode {
         }
 
         // Initializes drivetrain follower
-        follower = Constants.createFollower(hardwareMap);
+        follower = Constants.create(hardwareMap);
 
         // Initializes mechanisms
         shooter = tryMotor(SHOOTER_NAME, SHOOTER_DIR, DcMotor.ZeroPowerBehavior.FLOAT, true);
@@ -187,7 +164,7 @@ public class MasterAuto extends OpMode {
         initVision();
 
         plan = buildPlan(alliance, side);
-        follower.setStartingPose(plan.start);
+        follower.setPose(plan.start);
     }
 
     @Override
@@ -203,7 +180,7 @@ public class MasterAuto extends OpMode {
         // Rebuilds the plan only when the selection changes
         if (alliance != prevAlliance || side != prevSide) {
             plan = buildPlan(alliance, side);
-            follower.setStartingPose(plan.start);
+            follower.setPose(plan.start);
         }
 
         // Reads the obelisk motif tag
@@ -220,14 +197,13 @@ public class MasterAuto extends OpMode {
 
     @Override
     public void start() {
-        started = true;
         matchTimer.reset();
 
         // Frees camera bandwidth during the run
         closeVision();
 
         // Locks in the final start pose and deploys the intake servo
-        follower.setStartingPose(plan.start);
+        follower.setPose(plan.start);
         if (intakeServo != null) intakeServo.setPosition(SERVO_DEPLOY_POS);
 
         setState(State.DRIVE_TO_SHOOT);
@@ -243,7 +219,6 @@ public class MasterAuto extends OpMode {
 
         // Forces a stop at the match time limit
         if (state != State.DONE && matchTimer.seconds() >= AUTO_LIMIT_S) {
-            follower.breakFollowing();
             setState(State.DONE);
         }
 
@@ -252,7 +227,8 @@ public class MasterAuto extends OpMode {
         telemetry.addData("State", state);
         telemetry.addData("Cycle / Shots", cycle + " / " + shotsFired);
         telemetry.addData("Time left", "%.1f", AUTO_TOTAL_S - matchTimer.seconds());
-        telemetry.addData("Pose", fmt(follower.getPose()));
+        telemetry.addData("Pose", fmt(follower.pose()));
+        telemetry.addData("Follower mode", follower.mode());
         telemetry.addData("Shooter vel / target", "%.0f / %.0f", shooterVel, SHOOTER_TARGET_VEL);
         telemetry.addData("Spinup timed out", spinupTimedOut);
         telemetry.addData("Battery V", "%.2f", batteryVoltage);
@@ -263,7 +239,7 @@ public class MasterAuto extends OpMode {
     @Override
     public void stop() {
         // Saves pose and shuts everything down
-        if (follower != null) lastPose = follower.getPose();
+        if (follower != null) lastPose = follower.pose();
         stopMechanisms();
         closeVision();
     }
@@ -306,7 +282,11 @@ public class MasterAuto extends OpMode {
                 break;
 
             case INTAKE_SWEEP:
-                if (pathFinished(SWEEP_TIMEOUT_S)) setState(State.DRIVE_TO_SHOOT);
+                if (pathFinished(SWEEP_TIMEOUT_S)) setState(State.INTAKE_DWELL);
+                break;
+
+            case INTAKE_DWELL:
+                if (stateTimer.seconds() > INTAKE_DWELL_S) setState(State.DRIVE_TO_SHOOT);
                 break;
 
             case PARK:
@@ -329,7 +309,7 @@ public class MasterAuto extends OpMode {
                 shotsFired = 0;
                 setIntake(0);
                 setShooter(true);
-                startPath(plan.shoot, DRIVE_MAX_POWER);
+                startPath(plan.shoot);
                 break;
 
             case SPINUP:
@@ -349,23 +329,27 @@ public class MasterAuto extends OpMode {
 
             case DRIVE_TO_PICKUP:
                 setIntake(INTAKE_POWER);
-                startPath(plan.pickupStart, DRIVE_MAX_POWER);
+                startPath(plan.pickupStart);
                 break;
 
             case INTAKE_SWEEP:
                 setIntake(INTAKE_POWER);
                 setShooter(true);
-                startPath(plan.pickupEnd, SWEEP_MAX_POWER);
+                startPath(plan.pickupEnd);
+                break;
+
+            case INTAKE_DWELL:
+                setIntake(INTAKE_POWER);
                 break;
 
             case PARK:
                 stopMechanisms();
-                startPath(plan.park, DRIVE_MAX_POWER);
+                startPath(plan.park);
                 break;
 
             case DONE:
                 stopMechanisms();
-                lastPose = follower.getPose();
+                lastPose = follower.pose();
                 break;
         }
     }
@@ -386,23 +370,13 @@ public class MasterAuto extends OpMode {
 
     // Returns true when the path is done or has timed out
     private boolean pathFinished(double timeoutS) {
-        if (!follower.isBusy()) return true;
-        if (stateTimer.seconds() > timeoutS) {
-            follower.breakFollowing();
-            return true;
-        }
-        return false;
+        return !follower.isBusy() || stateTimer.seconds() > timeoutS;
     }
 
     // Builds and starts a straight path from the current pose
-    private void startPath(Pose target, double maxPower) {
-        Pose current = follower.getPose();
-        PathChain chain = follower.pathBuilder()
-                .addPath(new BezierLine(current, target))
-                .setLinearHeadingInterpolation(current.getHeading(), target.getHeading())
-                .build();
-        follower.setMaxPower(maxPower);
-        follower.followPath(chain, true);
+    private void startPath(Pose target) {
+        Pose current = follower.pose();
+        follower.follow(line(current, target).linear(current, target));
     }
 
     // Tracks how long the shooter has stayed inside tolerance
@@ -528,44 +502,50 @@ public class MasterAuto extends OpMode {
         if (readVoltage() < LOW_VOLTAGE_WARN) telemetry.addLine("LOW BATTERY");
     }
 
-    // Picks the plan for the selected alliance and side
+    // Builds the plan for the selected alliance and side
     private static Plan buildPlan(Alliance a, Side s) {
-        Side baseSide = (a == Alliance.BLUE) ? s : (s == Side.LEFT ? Side.RIGHT : Side.LEFT);
-        Plan base = (baseSide == Side.LEFT) ? BLUE_LEFT_WAYPOINTS : BLUE_RIGHT_WAYPOINTS;
-        Plan waypoints = (a == Alliance.BLUE) ? base : base.mirrored();
-        return new Plan(startFor(a, s), waypoints.shoot, waypoints.pickupStart, waypoints.pickupEnd, waypoints.park);
+        if (a == Alliance.BLUE) return makePlan(PoseFactory.degrees(), s);
+        // Red mirrors the blue numbers of the opposite side
+        PoseFactory red = PoseFactory.degrees().mirrorX(FIELD_MIRROR_X);
+        return makePlan(red, s == Side.LEFT ? Side.RIGHT : Side.LEFT);
     }
 
-    // Returns the start pose for a selection
-    private static Pose startFor(Alliance a, Side s) {
-        if (a == Alliance.BLUE) return (s == Side.LEFT) ? BLUE_LEFT_START : BLUE_RIGHT_START;
-        return (s == Side.LEFT) ? RED_LEFT_START : RED_RIGHT_START;
-    }
-
-    // Mirrors a pose across the field centerline
-    private static Pose mirror(Pose p) {
-        return new Pose(144 - p.getX(), p.getY(), Math.PI - p.getHeading());
+    // Blue waypoints per side in inches and degrees - placeholders to tune at the field
+    private static Plan makePlan(PoseFactory f, Side baseSide) {
+        if (baseSide == Side.LEFT) {
+            return new Plan(
+                    f.of(26, 130, 144),
+                    f.of(50, 94, 135),
+                    f.of(44, 84, 180),
+                    f.of(16, 84, 180),
+                    f.of(40, 72, 90));
+        }
+        return new Plan(
+                f.of(56, 8, 90),
+                f.of(60, 18, 112),
+                f.of(44, 36, 180),
+                f.of(16, 36, 180),
+                f.of(36, 12, 90));
     }
 
     // Formats a pose for telemetry
     private static String fmt(Pose p) {
-        return String.format("x=%.1f y=%.1f h=%.0f deg", p.getX(), p.getY(), Math.toDegrees(p.getHeading()));
+        return String.format("x=%.1f y=%.1f h=%.0f deg", p.x(), p.y(), Math.toDegrees(p.heading()));
     }
 
     // ===== TUNING NOTES =====
-    // Overshoots or oscillates at path end: lower the translational/heading PIDF in Constants.followerConstants.
-    // Drifts in curves or slips on turns: raise centripetal scaling and lower DRIVE_MAX_POWER.
-    // Stops short of target: raise brakingStrength or loosen PathConstraints end tolerance.
-    // Wrong stopping distance: rerun Pedro zero-power-acceleration tuners and update followerConstants.
-    // Pose drifts from reality: re-measure pod offsets and ticksToInches in Constants.localizerConstants.
-    // Robot mass changed: update followerConstants.mass and retune the drive PIDF.
+    // Run the Pedro AutoTune pages first and paste their output into pedro/Constants.java.
+    // Overshoots or oscillates at path end: rerun the Foresight tuner and adjust the headingFeedback and translational controllers.
+    // Stops short or brakes late: rerun the Foresight tuner and check the brake coefficients.
+    // Pose drifts from reality: rerun the Two Wheel tuner for ticks to inches, directions and pod offsets.
+    // Heading wrong or flipped: check the Control Hub logo and USB orientation in the Two Wheel config.
     // Shooter never reaches speed: raise SHOOTER_F first, then SHOOTER_P.
     // Shooter overshoots then hunts: lower SHOOTER_P or add a small SHOOTER_D.
     // Shooter sags after each shot: raise RECOVER_TIMEOUT_S and READY_HOLD_S.
-    // Shots fall short at low battery: raise MAX_COMP_SCALE or lower SHOOTER_TARGET_VEL margin.
-    // Pickup slips or misses: lower SWEEP_MAX_POWER and move pickupEnd further past the artifacts.
+    // Shots fall short at low battery: raise MAX_COMP_SCALE or raise SHOOTER_TARGET_VEL.
+    // Pickup misses artifacts: move pickupEnd further past them and raise INTAKE_DWELL_S.
     // Feeder jams or double feeds: adjust FEED_PULSE_S and FEEDER_POWER.
-    // Starts or ends in the wrong spot: retune the four START poses and the waypoint poses at the field.
+    // Starts or ends in the wrong spot: retune the waypoint numbers in makePlan at the field.
     // Mechanism spins backwards: flip the matching direction constant at the top of the file.
     // Servo moves wrong way: swap SERVO_STOW_POS and SERVO_DEPLOY_POS.
 }
