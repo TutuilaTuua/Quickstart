@@ -19,7 +19,6 @@ import com.qualcomm.robotcore.util.ElapsedTime;
 import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
 import org.firstinspires.ftc.teamcode.pedro.Constants;
 import org.firstinspires.ftc.vision.VisionPortal;
-import org.firstinspires.ftc.vision.apriltag.AprilTagDetection;
 import org.firstinspires.ftc.vision.apriltag.AprilTagProcessor;
 
 import java.util.ArrayList;
@@ -128,7 +127,7 @@ public class MasterAuto extends OpMode {
     private double shooterVel = 0;
     private double appliedVoltage = -1;
     private double batteryVoltage = NOMINAL_VOLTAGE;
-    private String motif = "UNKNOWN";
+    private int tagsSeen = 0;
     private String visionError = "";
 
     @Override
@@ -183,13 +182,13 @@ public class MasterAuto extends OpMode {
             follower.setPose(plan.start);
         }
 
-        // Reads the obelisk motif tag
-        readMotif();
+        // Counts visible AprilTags
+        readTags();
 
         telemetry.addLine("X = Blue | B = Red | DPad Left/Right = Side");
         telemetry.addData("Selected", alliance + " / " + side);
         telemetry.addData("Start pose", fmt(plan.start));
-        telemetry.addData("Motif", motif);
+        telemetry.addData("Tags seen", tagsSeen);
         telemetry.addData("Battery V", "%.2f", readVoltage());
         reportWarnings();
         telemetry.update();
@@ -477,14 +476,10 @@ public class MasterAuto extends OpMode {
         }
     }
 
-    // Reads obelisk tags 21, 22, 23 into a motif string
-    private void readMotif() {
+    // Counts the AprilTags currently detected
+    private void readTags() {
         if (tagProcessor == null) return;
-        for (AprilTagDetection detection : tagProcessor.getDetections()) {
-            if (detection.id == 21) motif = "GPP";
-            if (detection.id == 22) motif = "PGP";
-            if (detection.id == 23) motif = "PPG";
-        }
+        tagsSeen = tagProcessor.getDetections().size();
     }
 
     // Closes the camera portal
