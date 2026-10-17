@@ -5,8 +5,9 @@ import com.pedropathing.follower.FollowerConstants;
 import com.pedropathing.ftc.FollowerBuilder;
 import com.pedropathing.ftc.drivetrains.MecanumConstants;
 import com.pedropathing.ftc.localization.Encoder;
-import com.pedropathing.ftc.localization.constants.ThreeWheelConstants;
+import com.pedropathing.ftc.localization.constants.TwoWheelConstants;
 import com.pedropathing.paths.PathConstraints;
+import com.qualcomm.hardware.rev.RevHubOrientationOnRobot;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
@@ -31,27 +32,27 @@ public class Constants {
             .rightFrontMotorDirection(DcMotorSimple.Direction.FORWARD)
             .rightRearMotorDirection(DcMotorSimple.Direction.FORWARD);
 
-    // Dead wheels read from existing drive motor ports
-    public static ThreeWheelConstants localizerConstants = new ThreeWheelConstants()
+    // Two dead wheels read from existing drive motor ports, heading from the hub IMU
+    public static TwoWheelConstants localizerConstants = new TwoWheelConstants()
             .forwardTicksToInches(0.001989436789)
             .strafeTicksToInches(0.001989436789)
-            .turnTicksToInches(0.001989436789)
-            .leftPodY(5.5)
-            .rightPodY(-5.5)
+            .forwardPodY(0.0)
             .strafePodX(-3.0)
-            .leftEncoder_HardwareMapName("left_front")
-            .rightEncoder_HardwareMapName("right_front")
+            .forwardEncoder_HardwareMapName("left_front")
             .strafeEncoder_HardwareMapName("left_back")
-            .leftEncoderDirection(Encoder.REVERSE)
-            .rightEncoderDirection(Encoder.REVERSE)
-            .strafeEncoderDirection(Encoder.FORWARD);
+            .forwardEncoderDirection(Encoder.REVERSE)
+            .strafeEncoderDirection(Encoder.FORWARD)
+            .IMU_HardwareMapName("imu")
+            .IMU_Orientation(new RevHubOrientationOnRobot(
+                    RevHubOrientationOnRobot.LogoFacingDirection.UP,
+                    RevHubOrientationOnRobot.UsbFacingDirection.LEFT));
 
     // Builds the follower used by every OpMode
     public static Follower createFollower(HardwareMap hardwareMap) {
         return new FollowerBuilder(followerConstants, hardwareMap)
                 .pathConstraints(pathConstraints)
                 .mecanumDrivetrain(driveConstants)
-                .threeWheelLocalizer(localizerConstants)
+                .twoWheelLocalizer(localizerConstants)
                 .build();
     }
 }
