@@ -6,7 +6,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -24,7 +24,16 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug
+        run: |
+          set -o pipefail
+          ./gradlew assembleDebug --console=plain 2>&1 | tee build.log
+
+      - name: Show errors
+        if: failure()
+        run: |
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -n -E "error:|What went wrong|Could not|FAILED" -A4 build.log | head -120 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
